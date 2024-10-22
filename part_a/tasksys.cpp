@@ -90,6 +90,7 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     for (int i = 1; i < num_total_tasks; i++) {
         workers[i].join();
     }
+    // printf("I think I'm done\n");
 }
 
 TaskID TaskSystemParallelSpawn::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
@@ -198,40 +199,17 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     // tasks sequentially on the calling thread.
     //
 
-    // for (int i = 0; i < num_total_tasks; i++) {
-    //     runnable->runTask(i, num_total_tasks);
-    // }
     grab_task_mutex.lock();
+    complete_task_mutex.lock();
     next_task = 0;
     current_num_total_tasks = num_total_tasks;
     current_runnable = runnable;
+    tasks_completed = 0;
+
+    // printf("Created %d tasks, next task is %d\n. Finished %d tasks\n", current_num_total_tasks, next_task, tasks_completed);
+    complete_task_mutex.unlock();
     grab_task_mutex.unlock();
 
-    complete_task_mutex.lock();
-    tasks_completed = 0;
-    complete_task_mutex.unlock();
-
-    // while(not stop){
-    //     int my_task = -1;
-    //     grab_task_mutex.lock();
-    //     if (next_task < current_num_total_tasks) {
-    //         my_task = next_task;
-    //         next_task++;
-    //     } else {
-    //         printf("[main] next_task: %d, num_total_task: %d\n", next_task, num_total_tasks);
-    //         break;
-    //     }
-    //     grab_task_mutex.unlock();
-    //     if (my_task != -1){
-    //         current_runnable->runTask(my_task, current_num_total_tasks);
-    //         complete_task_mutex.lock();
-    //         tasks_completed++;
-    //         complete_task_mutex.unlock();
-    //     }
-    // }
-    // printf("[main]: tasks_completed %d, current_num_total_tasks: %d\n", tasks_completed, current_num_total_tasks);
-    // std::unique_lock<std::mutex> lock(complete_task_mutex);
-    // cv.wait(lock, [this] { return tasks_completed == current_num_total_tasks || stop; });
     workerThreadStart(0);
     // printf("I think I'm done\n");
     return;
