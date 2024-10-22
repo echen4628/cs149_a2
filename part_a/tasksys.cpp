@@ -120,19 +120,25 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    for(int i = 1; i < num_threads; i++){
-        workers.emplace_back(&TaskSystemParallelThreadPoolSpinning::workerThreadStart, this);
+    // for(int i = 1; i < num_threads; i++){
+    //     workers.emplace_back(&TaskSystemParallelThreadPoolSpinning::workerThreadStart, this);
+    // }
+    for (int i = 1; i < num_threads; i++) {
+        workers.emplace_back([this, i]() { 
+            this->workerThreadStart(i); 
+        });
     }
     next_task = 0;
     current_num_total_tasks = 0;
     tasks_completed = 0;
     current_runnable = NULL;
     stop = false;
-    printf("Made %d threads\n", num_threads);
+    // printf("Made %d threads\n", num_threads);
 }
 
-void TaskSystemParallelThreadPoolSpinning::workerThreadStart(){
-    while(not stop){
+void TaskSystemParallelThreadPoolSpinning::workerThreadStart(int const thread_id){
+    while(not stop) {
+        //barrier
         int my_task = -1;
         grab_task_mutex.lock();
         if (next_task < current_num_total_tasks) {
@@ -140,14 +146,40 @@ void TaskSystemParallelThreadPoolSpinning::workerThreadStart(){
             next_task++;
         }
         grab_task_mutex.unlock();
-        printf("My task is %d\n", my_task);
+        // printf("My task is %d\n", my_task);
         if (my_task != -1){
             current_runnable->runTask(my_task, current_num_total_tasks);
             complete_task_mutex.lock();
             tasks_completed++;
             complete_task_mutex.unlock();
         }
+        if (thread_id == 0){
+            complete_task_mutex.lock();
+            if (tasks_completed == current_num_total_tasks){
+                complete_task_mutex.unlock();
+                return;
+            }
+            complete_task_mutex.unlock();
+        }
     }
+
+
+    // while(not stop){
+    //     int my_task = -1;
+    //     grab_task_mutex.lock();
+    //     if (next_task < current_num_total_tasks) {
+    //         my_task = next_task;
+    //         next_task++;
+    //     }
+    //     grab_task_mutex.unlock();
+    //     printf("My task is %d\n", my_task);
+    //     if (my_task != -1){
+    //         current_runnable->runTask(my_task, current_num_total_tasks);
+    //         complete_task_mutex.lock();
+    //         tasks_completed++;
+    //         complete_task_mutex.unlock();
+    //     }
+    // }
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
@@ -179,28 +211,29 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     tasks_completed = 0;
     complete_task_mutex.unlock();
 
-    while(not stop){
-        int my_task = -1;
-        grab_task_mutex.lock();
-        if (next_task < current_num_total_tasks) {
-            my_task = next_task;
-            next_task++;
-        } else {
-            printf("[main] next_task: %d, num_total_task: %d\n", next_task, num_total_tasks);
-            break;
-        }
-        grab_task_mutex.unlock();
-        if (my_task != -1){
-            current_runnable->runTask(my_task, current_num_total_tasks);
-            complete_task_mutex.lock();
-            tasks_completed++;
-            complete_task_mutex.unlock();
-        }
-    }
-    printf("[main]: tasks_completed %d, current_num_total_tasks: %d\n", tasks_completed, current_num_total_tasks);
-    std::unique_lock<std::mutex> lock(complete_task_mutex);
-    cv.wait(lock, [this] { return tasks_completed == current_num_total_tasks || stop; });
-    printf("I think I'm done\n");
+    // while(not stop){
+    //     int my_task = -1;
+    //     grab_task_mutex.lock();
+    //     if (next_task < current_num_total_tasks) {
+    //         my_task = next_task;
+    //         next_task++;
+    //     } else {
+    //         printf("[main] next_task: %d, num_total_task: %d\n", next_task, num_total_tasks);
+    //         break;
+    //     }
+    //     grab_task_mutex.unlock();
+    //     if (my_task != -1){
+    //         current_runnable->runTask(my_task, current_num_total_tasks);
+    //         complete_task_mutex.lock();
+    //         tasks_completed++;
+    //         complete_task_mutex.unlock();
+    //     }
+    // }
+    // printf("[main]: tasks_completed %d, current_num_total_tasks: %d\n", tasks_completed, current_num_total_tasks);
+    // std::unique_lock<std::mutex> lock(complete_task_mutex);
+    // cv.wait(lock, [this] { return tasks_completed == current_num_total_tasks || stop; });
+    workerThreadStart(0);
+    // printf("I think I'm done\n");
     return;
 }
 
