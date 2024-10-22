@@ -2,6 +2,17 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <thread>
+#include <vector>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
+
+typedef struct {
+    IRunnable* runnable;
+    int task_id;
+    int num_total_tasks;
+} WorkerArgs;
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -30,6 +41,7 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         TaskSystemParallelSpawn(int num_threads);
         ~TaskSystemParallelSpawn();
         const char* name();
+        static void workerThreadStart(WorkerArgs * const args);
         void run(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
@@ -50,7 +62,18 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         void run(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
+        void workerThreadStart();
         void sync();
+        std::vector<std::thread> workers;
+        std::mutex grab_task_mutex;
+        std::mutex complete_task_mutex;
+        std::condition_variable cv;
+        int next_task;
+        int current_num_total_tasks;
+        int tasks_completed; // set as atomic
+        IRunnable* current_runnable;
+        std::atomic<bool> stop;
+
 };
 
 /*
