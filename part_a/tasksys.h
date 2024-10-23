@@ -75,10 +75,9 @@ public:
     std::vector<std::thread> workers;
     std::mutex grab_task_mutex;
     std::mutex complete_task_mutex;
-    std::condition_variable cv;
     int next_task;
     int current_num_total_tasks;
-    int tasks_completed; // set as atomic
+    int tasks_completed;
     IRunnable *current_runnable;
     std::atomic<bool> stop;
 };
@@ -95,10 +94,22 @@ public:
     TaskSystemParallelThreadPoolSleeping(int num_threads);
     ~TaskSystemParallelThreadPoolSleeping();
     const char *name();
+    void workerThreadStart(int const thread_id);
     void run(IRunnable *runnable, int num_total_tasks);
     TaskID runAsyncWithDeps(IRunnable *runnable, int num_total_tasks,
                             const std::vector<TaskID> &deps);
     void sync();
+
+    std::vector<std::thread> workers;
+    std::mutex grab_task_mutex;
+    std::mutex complete_task_mutex;
+    std::condition_variable is_complete;
+    std::condition_variable have_task;
+    int next_task;
+    int current_num_total_tasks;
+    int tasks_completed;
+    IRunnable *current_runnable;
+    std::atomic<bool> stop;
 };
 
 #endif

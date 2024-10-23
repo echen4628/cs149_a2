@@ -121,9 +121,7 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    // for(int i = 1; i < num_threads; i++){
-    //     workers.emplace_back(&TaskSystemParallelThreadPoolSpinning::workerThreadStart, this);
-    // }
+
     for (int i = 1; i < num_threads; i++) {
         workers.emplace_back([this, i]() { 
             this->workerThreadStart(i); 
@@ -134,12 +132,10 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     tasks_completed = 0;
     current_runnable = NULL;
     stop = false;
-    // printf("Made %d threads\n", num_threads);
 }
 
 void TaskSystemParallelThreadPoolSpinning::workerThreadStart(int const thread_id){
     while(not stop) {
-        //barrier
         int my_task = -1;
         grab_task_mutex.lock();
         if (next_task < current_num_total_tasks) {
@@ -147,7 +143,6 @@ void TaskSystemParallelThreadPoolSpinning::workerThreadStart(int const thread_id
             next_task++;
         }
         grab_task_mutex.unlock();
-        // printf("My task is %d\n", my_task);
         if (my_task != -1){
             current_runnable->runTask(my_task, current_num_total_tasks);
             complete_task_mutex.lock();
@@ -163,24 +158,6 @@ void TaskSystemParallelThreadPoolSpinning::workerThreadStart(int const thread_id
             complete_task_mutex.unlock();
         }
     }
-
-
-    // while(not stop){
-    //     int my_task = -1;
-    //     grab_task_mutex.lock();
-    //     if (next_task < current_num_total_tasks) {
-    //         my_task = next_task;
-    //         next_task++;
-    //     }
-    //     grab_task_mutex.unlock();
-    //     printf("My task is %d\n", my_task);
-    //     if (my_task != -1){
-    //         current_runnable->runTask(my_task, current_num_total_tasks);
-    //         complete_task_mutex.lock();
-    //         tasks_completed++;
-    //         complete_task_mutex.unlock();
-    //     }
-    // }
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
@@ -243,6 +220,16 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    for (int i = 1; i < num_threads; i++) {
+        workers.emplace_back([this, i]() { 
+            this->workerThreadStart(i); 
+        });
+    }
+    next_task = 0;
+    current_num_total_tasks = 0;
+    tasks_completed = 0;
+    current_runnable = NULL;
+    stop = false;
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
@@ -252,6 +239,46 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+
+    stop = true;
+    have_task.notify_all();
+    is_complete.notify_all();
+    for (auto& worker : workers) {
+        worker.join();  // Wait for all threads to finish
+    }
+}
+
+void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id) {
+     while(not stop) {
+        int my_task = -1;
+        grab_task_mutex.lock();
+        if (next_task < current_num_total_tasks) {
+            my_task = next_task;
+            next_task++;
+        }
+        grab_task_mutex.unlock();
+        if (my_task != -1){
+            current_runnable->runTask(my_task, current_num_total_tasks);
+            complete_task_mutex.lock();
+            tasks_completed++;
+            if (tasks_completed == current_num_total_tasks){
+                complete_task_mutex.unlock();
+                is_complete.notify_all();
+            }
+            complete_task_mutex.unlock();
+            
+        } else {
+            if (thread_id == 0) {
+                std::unique_lock<std::mutex> complete_task_lk(complete_task_mutex);
+                is_complete.wait(complete_task_lk, [this]{return (tasks_completed == current_num_total_tasks) || stop;});
+                return;
+            } else {
+                std::unique_lock<std::mutex> grab_task_lk(grab_task_mutex);
+                have_task.wait(grab_task_lk, [this]{return (next_task < current_num_total_tasks) || stop;});
+                continue;
+            }
+        }
+    }
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
@@ -263,9 +290,21 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     // tasks sequentially on the calling thread.
     //
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
-    }
+    grab_task_mutex.lock();
+    complete_task_mutex.lock();
+    next_task = 0;
+    current_num_total_tasks = num_total_tasks;
+    current_runnable = runnable;
+    tasks_completed = 0;
+
+    // printf("Created %d tasks, next task is %d\n. Finished %d tasks\n", current_num_total_tasks, next_task, tasks_completed);
+    complete_task_mutex.unlock();
+    grab_task_mutex.unlock();
+    have_task.notify_all();
+
+    workerThreadStart(0);
+    // printf("I think I'm done\n");
+    return;
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
@@ -274,6 +313,8 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
 
     //
     // TODO: CS149 students will implement this method in Part B.
+    //
+
     //
 
     return 0;
