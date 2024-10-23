@@ -2,6 +2,22 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include "thread"
+#include "vector"
+#include <atomic>
+#include "unordered_map"
+#include "mutex"
+#include "condition_variable"
+
+struct TaskRecord {
+    int next_work_item;
+    int total_work_count;
+    int completed_work_count;
+    int remaining_dependencies;
+    std::string str_taskid;
+    IRunnable* current_runnable;
+    std::mutex accessTaskRecord;
+};
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -68,6 +84,22 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+        void workerThreadStart(int const thread_id);
+
+        std::vector<std::thread> workers;
+        std::atomic<bool> stop;
+        std::vector<TaskRecord*> readyToRun;
+        std::unordered_map<std::string, std::vector<TaskRecord*>> dependencies;
+        std::mutex accessReadyToRun;
+        std::mutex accessDependencies;
+        int next_task_id;
+        std::condition_variable waitForTask;
+        std::condition_variable waitForComplete;
+        std::mutex accessTotalTask;
+        int current_total_task_launched;
+        int final_total_task_launched;
+        int total_task_completed;
+
 };
 
 #endif

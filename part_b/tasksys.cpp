@@ -133,6 +133,15 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    for (int i = 1; i < num_threads; i++){
+        workers.emplace_back([this, i]() {
+            TaskSystemParallelThreadPoolSleeping::workerThreadStart(i);
+        });
+    }
+    next_task_id = 0;
+    current_total_task_launched = 0;
+    final_total_task_launched = -1;
+    total_task_completed = 0;
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
@@ -142,6 +151,27 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    stop = true;
+    waitForComplete.notify_all();
+    waitForTask.notify_all();
+    for (auto& worker : workers){
+        worker.join();
+    }
+    workers.clear();
+
+    // for (auto& [key, task_list] : dependencies) {
+    //     // Iterate over each vector in the map
+    //     for (TaskRecord* task : task_list) {
+    //         delete task;  // Deallocate the dynamically allocated TaskRecord
+    //     }
+    //     task_list.clear();  // Clear the vector after deallocating its elements
+    // }
+    // dependencies.clear();  // Clear the unordered_map itself
+
+    // for (auto& task: readyToRun) {
+    //     delete task;
+    // }
+    // readyToRun.clear();
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
@@ -166,11 +196,42 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     // TODO: CS149 students will implement this method in Part B.
     //
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    // for (int i = 0; i < num_total_tasks; i++) {
+    //     runnable->runTask(i, num_total_tasks);
+    // }
+    
+    // create a new work_unit
+    TaskRecord* currentTask = new TaskRecord;
+    currentTask->next_work_item = 0;
+    currentTask->completed_work_count = 0;
+    currentTask->total_work_count = num_total_tasks;
+    currentTask->current_runnable = runnable;
+    currentTask->remaining_dependencies = 0;
+    currentTask->str_taskid = std::to_string(next_task_id);
+    next_task_id += 1;
+    accessDependencies.lock();
+    for (TaskID dep : deps) {
+        if (dependencies.find(std::to_string(dep)) == dependencies.end()){
+            // not found
+        } else {
+            currentTask->remaining_dependencies += 1;
+            dependencies[std::to_string(dep)].emplace_back(currentTask);
+        }
     }
+    if (currentTask->remaining_dependencies == 0) {
+        accessReadyToRun.lock();
+        readyToRun.emplace_back(currentTask);
+        accessReadyToRun.unlock();
+    }
+    accessDependencies.unlock();
 
-    return 0;
+    waitForComplete.notify_all();
+
+    accessTotalTask.lock();
+    current_total_task_launched += 1;
+    accessTotalTask.unlock();
+
+    return next_task_id-1;
 }
 
 void TaskSystemParallelThreadPoolSleeping::sync() {
@@ -178,6 +239,116 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     //
     // TODO: CS149 students will modify the implementation of this method in Part B.
     //
-
+    accessTotalTask.lock();
+    final_total_task_launched = current_total_task_launched;
+    accessTotalTask.unlock();
+    workerThreadStart(0);
     return;
+}
+
+void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id) {
+    while(not stop) {
+        // get lock
+        TaskRecord* myTaskRecord = NULL;
+        int myWorkItem = -1;
+        accessReadyToRun.lock();
+        if (readyToRun.size() != 0){
+            myTaskRecord = readyToRun[readyToRun.size()-1];
+            myTaskRecord->accessTaskRecord.lock();
+            myWorkItem = myTaskRecord->next_work_item;
+            myTaskRecord->next_work_item += 1;
+            if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
+                readyToRun.pop_back();
+            }
+            myTaskRecord->accessTaskRecord.unlock();
+        }
+        accessReadyToRun.unlock();
+
+        if (myTaskRecord and myWorkItem != -1) {
+            myTaskRecord->current_runnable->runTask(myWorkItem, myTaskRecord->total_work_count);
+
+            // lock to update completed work count
+            myTaskRecord->accessTaskRecord.lock();
+            myTaskRecord->completed_work_count += 1;
+
+            // if this task is completed
+            if (myTaskRecord->completed_work_count == myTaskRecord->total_work_count) {
+
+                // don't need to update myTaskRecord anymore, this task is done
+                // also at this point no other thread should be using myTaskRecord
+                myTaskRecord->accessTaskRecord.unlock();
+
+                // task is completed, so update dependencies
+                accessDependencies.lock();
+
+                for (TaskRecord* nextTaskRecord : dependencies[myTaskRecord->str_taskid]) {
+                    
+                    // update nextTaskRecord
+                    nextTaskRecord->accessTaskRecord.lock();
+                    nextTaskRecord->remaining_dependencies -= 1;
+                    if (nextTaskRecord->remaining_dependencies == 0) {
+
+                        // if the nextTaskRecord is ready to run, then update ReadyToRun
+                        accessReadyToRun.lock();
+                        readyToRun.emplace_back(nextTaskRecord);
+                        accessReadyToRun.unlock();
+                    }
+                    // completes updating nextTaskRecord
+                    nextTaskRecord->accessTaskRecord.unlock();
+                }
+
+                // all existing tasks dependent on myTask is cleared
+                dependencies.erase(myTaskRecord->str_taskid);
+                accessDependencies.unlock();
+
+                // at this point, no other thread should be using this task
+                // delete myTaskRecord;
+
+                // task is complete, so update total_task_completed
+                accessTotalTask.lock();
+                total_task_completed += 1;
+                if (total_task_completed == final_total_task_launched) {
+                    accessTotalTask.unlock();
+                    waitForComplete.notify_all();
+                }
+                accessTotalTask.unlock();
+            }
+        } else {
+            if (thread_id == 0) {
+                std::unique_lock<std::mutex> waitForCompleteLock(accessTotalTask);
+                waitForComplete.wait(waitForCompleteLock, [this]{
+                    return ((final_total_task_launched == total_task_completed) || stop);
+                });
+                return;
+            } else {
+                std::unique_lock<std::mutex> waitForTaskLock(accessReadyToRun);
+                waitForTask.wait(waitForTaskLock, [this]{
+                    return ((readyToRun.size() != 0) || stop);
+                });
+                continue;
+            }
+        }
+
+        // my_work_batch null pointer
+        // if readyToRun is not empty {
+        //      my_work_batch = readyToRun[0];
+        //      increment next_task in my_work_batch
+        //      if next_task == total_num_tasks {
+        //          remove it from readyToRun
+        // }
+        // remove_lock
+        // work on my task
+        // when task is done {
+        //      grab lock
+        //      increment completed_task in my_work_batch
+        //      if completed_task == total_num_tasks {
+        //          increment total_complete
+        //          flag it as done internally
+        //      }
+        //  if completely_done_flag on
+        //      get another lock
+        //      move the dependencies to ready_to_run
+        //}
+        /// }
+    }
 }
