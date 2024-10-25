@@ -1,5 +1,6 @@
 #include "tasksys.h"
-
+#include "iostream"
+#include "ostream"
 
 IRunnable::~IRunnable() {}
 
@@ -209,23 +210,27 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     currentTask->remaining_dependencies = 0;
     currentTask->str_taskid = std::to_string(next_task_id);
     next_task_id += 1;
+    dependencies[currentTask->str_taskid] = std::vector<TaskRecord*>();
     accessDependencies.lock();
     for (TaskID dep : deps) {
         if (dependencies.find(std::to_string(dep)) == dependencies.end()){
-            // not found
+            printf("TaskID %d has no dependencies\n", dep);
         } else {
             currentTask->remaining_dependencies += 1;
             dependencies[std::to_string(dep)].emplace_back(currentTask);
+            // std::cout << "Processing dependency TaskID: " << dep << " as string: " << std::to_string(dep) << std::endl;
+
         }
     }
     if (currentTask->remaining_dependencies == 0) {
+        printf("Added task %d to readytoRun\n", next_task_id-1);
         accessReadyToRun.lock();
         readyToRun.emplace_back(currentTask);
         accessReadyToRun.unlock();
     }
     accessDependencies.unlock();
 
-    waitForComplete.notify_all();
+    waitForTask.notify_all();
 
     accessTotalTask.lock();
     current_total_task_launched += 1;
@@ -242,11 +247,13 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     accessTotalTask.lock();
     final_total_task_launched = current_total_task_launched;
     accessTotalTask.unlock();
+    waitForTask.notify_all();
     workerThreadStart(0);
     return;
 }
 
 void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id) {
+    printf("[Thread %d] Online\n", thread_id);
     while(not stop) {
         // get lock
         TaskRecord* myTaskRecord = NULL;
@@ -263,17 +270,20 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
             myTaskRecord->accessTaskRecord.unlock();
         }
         accessReadyToRun.unlock();
+        
+        printf("[Thread %d] Task is %d\n", thread_id, myWorkItem);
 
         if (myTaskRecord and myWorkItem != -1) {
+            // std::cout << "[Thread " << std::to_string(thread_id) << "Processing  job: " << myTaskRecord->str_taskid << std::endl;
             myTaskRecord->current_runnable->runTask(myWorkItem, myTaskRecord->total_work_count);
-
+            printf("[Thread %d] Task %d is done\n", thread_id, myWorkItem);
             // lock to update completed work count
             myTaskRecord->accessTaskRecord.lock();
             myTaskRecord->completed_work_count += 1;
 
             // if this task is completed
             if (myTaskRecord->completed_work_count == myTaskRecord->total_work_count) {
-
+                printf("[Thread %d] Completed job\n", thread_id);
                 // don't need to update myTaskRecord anymore, this task is done
                 // also at this point no other thread should be using myTaskRecord
                 myTaskRecord->accessTaskRecord.unlock();
@@ -314,6 +324,7 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                 accessTotalTask.unlock();
             }
         } else {
+            printf("[Thread %d] Can't find work\n", thread_id);
             if (thread_id == 0) {
                 std::unique_lock<std::mutex> waitForCompleteLock(accessTotalTask);
                 waitForComplete.wait(waitForCompleteLock, [this]{
