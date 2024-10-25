@@ -140,9 +140,11 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
         });
     }
     next_task_id = 0;
+    stop = 0;
     current_total_task_launched = 0;
     final_total_task_launched = -1;
     total_task_completed = 0;
+    // printf("Newly created\n");
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
@@ -160,19 +162,24 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     }
     workers.clear();
 
-    // for (auto& [key, task_list] : dependencies) {
-    //     // Iterate over each vector in the map
-    //     for (TaskRecord* task : task_list) {
-    //         delete task;  // Deallocate the dynamically allocated TaskRecord
-    //     }
-    //     task_list.clear();  // Clear the vector after deallocating its elements
-    // }
-    // dependencies.clear();  // Clear the unordered_map itself
+    for (auto it = dependencies.begin(); it != dependencies.end(); ++it) {
+        // Access the key and the vector of TaskRecord pointers
+        // const std::string& key = it->first;         // Access the key
+        std::vector<TaskRecord*>& task_list = it->second;  // Access the vector of TaskRecord pointers
 
-    // for (auto& task: readyToRun) {
-    //     delete task;
-    // }
-    // readyToRun.clear();
+        // Iterate over each vector in the map
+        for (TaskRecord* task : task_list) {
+            delete task;  // Deallocate the dynamically allocated TaskRecord
+        }
+        task_list.clear();  // Clear the vector after deallocating its elements
+    }
+
+    dependencies.clear();  // Clear the unordered_map itself
+
+    for (auto& task: readyToRun) {
+        delete task;
+    }
+    readyToRun.clear();
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
@@ -211,10 +218,10 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     currentTask->str_taskid = std::to_string(next_task_id);
     next_task_id += 1;
     dependencies[currentTask->str_taskid] = std::vector<TaskRecord*>();
-    accessDependencies.lock();
+    bigMutex.lock();
     for (TaskID dep : deps) {
         if (dependencies.find(std::to_string(dep)) == dependencies.end()){
-            printf("TaskID %d has no dependencies\n", dep);
+            // printf("TaskID %d has no dependencies\n", dep);
         } else {
             currentTask->remaining_dependencies += 1;
             dependencies[std::to_string(dep)].emplace_back(currentTask);
@@ -223,18 +230,18 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
         }
     }
     if (currentTask->remaining_dependencies == 0) {
-        printf("Added task %d to readytoRun\n", next_task_id-1);
-        accessReadyToRun.lock();
+        // printf("Added task %d to readytoRun\n", next_task_id-1);
+        // bigMutex.lock();
         readyToRun.emplace_back(currentTask);
-        accessReadyToRun.unlock();
+        // bigMutex.unlock();
     }
-    accessDependencies.unlock();
+    bigMutex.unlock();
 
     waitForTask.notify_all();
 
-    accessTotalTask.lock();
+    bigMutex.lock();
     current_total_task_launched += 1;
-    accessTotalTask.unlock();
+    bigMutex.unlock();
 
     return next_task_id-1;
 }
@@ -244,122 +251,190 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     //
     // TODO: CS149 students will modify the implementation of this method in Part B.
     //
-    accessTotalTask.lock();
+    bigMutex.lock();
     final_total_task_launched = current_total_task_launched;
-    accessTotalTask.unlock();
+    bigMutex.unlock();
     waitForTask.notify_all();
     workerThreadStart(0);
     return;
 }
 
 void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id) {
-    printf("[Thread %d] Online\n", thread_id);
+    // printf("Stop is %d\n", stop.load());
     while(not stop) {
-        // get lock
+        // printf("[Thread %d] Looking for work\n", thread_id);
         TaskRecord* myTaskRecord = NULL;
         int myWorkItem = -1;
-        accessReadyToRun.lock();
-        if (readyToRun.size() != 0){
-            myTaskRecord = readyToRun[readyToRun.size()-1];
-            myTaskRecord->accessTaskRecord.lock();
-            myWorkItem = myTaskRecord->next_work_item;
-            myTaskRecord->next_work_item += 1;
-            if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
-                readyToRun.pop_back();
+        {
+            std::unique_lock<std::mutex> lock(bigMutex);
+            if (readyToRun.size() != 0){
+                myTaskRecord = readyToRun[readyToRun.size()-1];
+                myWorkItem = myTaskRecord->next_work_item;
+                myTaskRecord->next_work_item += 1;
+                if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
+                    readyToRun.pop_back();
+                }
             }
-            myTaskRecord->accessTaskRecord.unlock();
         }
-        accessReadyToRun.unlock();
-        
-        printf("[Thread %d] Task is %d\n", thread_id, myWorkItem);
-
-        if (myTaskRecord and myWorkItem != -1) {
-            // std::cout << "[Thread " << std::to_string(thread_id) << "Processing  job: " << myTaskRecord->str_taskid << std::endl;
-            myTaskRecord->current_runnable->runTask(myWorkItem, myTaskRecord->total_work_count);
-            printf("[Thread %d] Task %d is done\n", thread_id, myWorkItem);
-            // lock to update completed work count
-            myTaskRecord->accessTaskRecord.lock();
-            myTaskRecord->completed_work_count += 1;
-
-            // if this task is completed
-            if (myTaskRecord->completed_work_count == myTaskRecord->total_work_count) {
-                printf("[Thread %d] Completed job\n", thread_id);
-                // don't need to update myTaskRecord anymore, this task is done
-                // also at this point no other thread should be using myTaskRecord
-                myTaskRecord->accessTaskRecord.unlock();
-
-                // task is completed, so update dependencies
-                accessDependencies.lock();
-
-                for (TaskRecord* nextTaskRecord : dependencies[myTaskRecord->str_taskid]) {
-                    
-                    // update nextTaskRecord
-                    nextTaskRecord->accessTaskRecord.lock();
-                    nextTaskRecord->remaining_dependencies -= 1;
-                    if (nextTaskRecord->remaining_dependencies == 0) {
-
-                        // if the nextTaskRecord is ready to run, then update ReadyToRun
-                        accessReadyToRun.lock();
-                        readyToRun.emplace_back(nextTaskRecord);
-                        accessReadyToRun.unlock();
-                    }
-                    // completes updating nextTaskRecord
-                    nextTaskRecord->accessTaskRecord.unlock();
-                }
-
-                // all existing tasks dependent on myTask is cleared
-                dependencies.erase(myTaskRecord->str_taskid);
-                accessDependencies.unlock();
-
-                // at this point, no other thread should be using this task
-                // delete myTaskRecord;
-
-                // task is complete, so update total_task_completed
-                accessTotalTask.lock();
-                total_task_completed += 1;
-                if (total_task_completed == final_total_task_launched) {
-                    accessTotalTask.unlock();
-                    waitForComplete.notify_all();
-                }
-                accessTotalTask.unlock();
-            }
-        } else {
-            printf("[Thread %d] Can't find work\n", thread_id);
+        if (myWorkItem == -1) {
+            // printf("[Thread %d] Can't find work\n", thread_id);
             if (thread_id == 0) {
-                std::unique_lock<std::mutex> waitForCompleteLock(accessTotalTask);
+                std::unique_lock<std::mutex> waitForCompleteLock(bigMutex);
                 waitForComplete.wait(waitForCompleteLock, [this]{
                     return ((final_total_task_launched == total_task_completed) || stop);
                 });
                 return;
             } else {
-                std::unique_lock<std::mutex> waitForTaskLock(accessReadyToRun);
+                std::unique_lock<std::mutex> waitForTaskLock(bigMutex);
                 waitForTask.wait(waitForTaskLock, [this]{
                     return ((readyToRun.size() != 0) || stop);
                 });
                 continue;
             }
+        } else{
+            // printf("[Thread %d]: I have task %d\n", thread_id, myWorkItem);
+            myTaskRecord->current_runnable->runTask(myWorkItem, myTaskRecord->total_work_count);
+            // printf("[Thread %d]: I finished task %d\n", thread_id, myWorkItem);
+            {
+                std::unique_lock<std::mutex> lock(bigMutex);
+                myTaskRecord->completed_work_count += 1;
+                if (myTaskRecord->completed_work_count == myTaskRecord->total_work_count){
+                    // printf("[Thread %d]: I totally completed a task group\n", thread_id);
+                    for (TaskRecord* nextTaskRecord : dependencies[myTaskRecord->str_taskid]) {
+                        nextTaskRecord->remaining_dependencies -= 1;
+                        if (nextTaskRecord->remaining_dependencies == 0) {
+                            // printf("[Thread %d]: I added a new task group\n", thread_id);
+                            readyToRun.emplace_back(nextTaskRecord);
+                            waitForTask.notify_all();
+                        }
+                    }
+                    dependencies.erase(myTaskRecord->str_taskid);
+                    total_task_completed += 1;
+                    // printf("[Thread %d]: total task progress is %d/%d\n", thread_id, total_task_completed, final_total_task_launched);
+                    if (total_task_completed == final_total_task_launched) {
+                        waitForComplete.notify_all();
+                    }
+                }
+            }
         }
-
-        // my_work_batch null pointer
-        // if readyToRun is not empty {
-        //      my_work_batch = readyToRun[0];
-        //      increment next_task in my_work_batch
-        //      if next_task == total_num_tasks {
-        //          remove it from readyToRun
-        // }
-        // remove_lock
-        // work on my task
-        // when task is done {
-        //      grab lock
-        //      increment completed_task in my_work_batch
-        //      if completed_task == total_num_tasks {
-        //          increment total_complete
-        //          flag it as done internally
-        //      }
-        //  if completely_done_flag on
-        //      get another lock
-        //      move the dependencies to ready_to_run
-        //}
-        /// }
     }
 }
+
+// void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id) {
+//     printf("[Thread %d] Online\n", thread_id);
+//     while(not stop) {
+//         // get lock
+//         TaskRecord* myTaskRecord = NULL;
+//         int myWorkItem = -1;
+//         bigMutex.lock();
+//         if (readyToRun.size() != 0){
+//             myTaskRecord = readyToRun[readyToRun.size()-1];
+//             // myTaskRecord->accessTaskRecord.lock();
+//             myWorkItem = myTaskRecord->next_work_item;
+//             myTaskRecord->next_work_item += 1;
+//             if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
+//                 readyToRun.pop_back();
+//             }
+//             // myTaskRecord->accessTaskRecord.unlock();
+//         }
+//         bigMutex.unlock();
+        
+//         printf("[Thread %d] Task is %d\n", thread_id, myWorkItem);
+
+//         if (myTaskRecord and myWorkItem != -1) {
+//             // std::cout << "[Thread " << std::to_string(thread_id) << "Processing  job: " << myTaskRecord->str_taskid << std::endl;
+//             myTaskRecord->current_runnable->runTask(myWorkItem, myTaskRecord->total_work_count);
+//             printf("[Thread %d] Task %d is done\n", thread_id, myWorkItem);
+//             // lock to update completed work count
+//             bigMutex.lock();
+//             // myTaskRecord->accessTaskRecord.lock();
+//             myTaskRecord->completed_work_count += 1;
+//             printf("[Thread %d] completed work is %d out of %d\n", thread_id, myTaskRecord->completed_work_count, myTaskRecord->total_work_count);
+
+//             // if this task is completed
+//             if (myTaskRecord->completed_work_count == myTaskRecord->total_work_count) {
+//                 printf("[Thread %d] Completed job\n", thread_id);
+//                 // don't need to update myTaskRecord anymore, this task is done
+//                 // also at this point no other thread should be using myTaskRecord
+//                 // myTaskRecord->accessTaskRecord.unlock();
+//                 bigMutex.unlock();
+//                 // task is completed, so update dependencies
+//                 bigMutex.lock();
+
+//                 for (TaskRecord* nextTaskRecord : dependencies[myTaskRecord->str_taskid]) {
+                    
+//                     // update nextTaskRecord
+//                     // nextTaskRecord->accessTaskRecord.lock();
+//                     nextTaskRecord->remaining_dependencies -= 1;
+//                     if (nextTaskRecord->remaining_dependencies == 0) {
+
+//                         // if the nextTaskRecord is ready to run, then update ReadyToRun
+//                         // accessReadyToRun.lock();
+//                         readyToRun.emplace_back(nextTaskRecord);
+//                         // accessReadyToRun.unlock();
+//                     }
+//                     // completes updating nextTaskRecord
+//                     // nextTaskRecord->accessTaskRecord.unlock();
+//                 }
+
+//                 // all existing tasks dependent on myTask is cleared
+//                 dependencies.erase(myTaskRecord->str_taskid);
+//                 bigMutex.unlock();
+
+//                 // at this point, no other thread should be using this task
+//                 // delete myTaskRecord;
+
+//                 // task is complete, so update total_task_completed
+//                 bigMutex.lock();
+//                 total_task_completed += 1;
+//                 if (total_task_completed == final_total_task_launched) {
+//                     bigMutex.unlock();
+//                     waitForComplete.notify_all();
+//                 }
+//                 bigMutex.unlock();
+//             }
+//         }
+        
+//         bigMutex.lock();
+//         if(readyToRun.size() == 0){
+//             bigMutex.unlock();
+//             printf("[Thread %d] Can't find work\n", thread_id);
+//             if (thread_id == 0) {
+//                 std::unique_lock<std::mutex> waitForCompleteLock(bigMutex);
+//                 waitForComplete.wait(waitForCompleteLock, [this]{
+//                     return ((final_total_task_launched == total_task_completed) || stop);
+//                 });
+//                 return;
+//             } else {
+//                 std::unique_lock<std::mutex> waitForTaskLock(bigMutex);
+//                 waitForTask.wait(waitForTaskLock, [this]{
+//                     return ((readyToRun.size() != 0) || stop);
+//                 });
+//                 continue;
+//             }
+//         }
+//         bigMutex.unlock();
+
+//         // my_work_batch null pointer
+//         // if readyToRun is not empty {
+//         //      my_work_batch = readyToRun[0];
+//         //      increment next_task in my_work_batch
+//         //      if next_task == total_num_tasks {
+//         //          remove it from readyToRun
+//         // }
+//         // remove_lock
+//         // work on my task
+//         // when task is done {
+//         //      grab lock
+//         //      increment completed_task in my_work_batch
+//         //      if completed_task == total_num_tasks {
+//         //          increment total_complete
+//         //          flag it as done internally
+//         //      }
+//         //  if completely_done_flag on
+//         //      get another lock
+//         //      move the dependencies to ready_to_run
+//         //}
+//         /// }
+//     }
+// }
