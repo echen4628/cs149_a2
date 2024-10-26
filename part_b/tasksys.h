@@ -8,6 +8,7 @@
 #include "unordered_map"
 #include "mutex"
 #include "condition_variable"
+#include "string"
 
 struct TaskRecord {
     int next_work_item;
@@ -90,8 +91,8 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::atomic<bool> stop;
         std::vector<TaskRecord*> readyToRun;
         std::unordered_map<std::string, std::vector<TaskRecord*>> dependencies;
-        // std::mutex accessReadyToRun;
-        // std::mutex accessDependencies;
+        std::mutex accessReadyToRun;
+        std::mutex accessDependencies;
         std::mutex bigMutex;
         int next_task_id;
         std::condition_variable waitForTask;
