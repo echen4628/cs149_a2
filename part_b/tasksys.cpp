@@ -217,8 +217,8 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     currentTask->remaining_dependencies = 0;
     currentTask->str_taskid = std::to_string(next_task_id);
     next_task_id += 1;
-    dependencies[currentTask->str_taskid] = std::vector<TaskRecord*>();
     bigMutex.lock();
+    dependencies[currentTask->str_taskid] = std::vector<TaskRecord*>();
     for (TaskID dep : deps) {
         if (dependencies.find(std::to_string(dep)) == dependencies.end()){
             // printf("TaskID %d has no dependencies\n", dep);
@@ -277,7 +277,7 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
             }
         }
         if (myWorkItem == -1) {
-            // printf("[Thread %d] Can't find work\n", thread_id);
+            printf("[Thread %d] Can't find work\n", thread_id);
             if (thread_id == 0) {
                 std::unique_lock<std::mutex> waitForCompleteLock(bigMutex);
                 waitForComplete.wait(waitForCompleteLock, [this]{
@@ -286,6 +286,7 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                 return;
             } else {
                 std::unique_lock<std::mutex> waitForTaskLock(bigMutex);
+                printf("[Thread %d] Number of keys: %ld\n", thread_id, dependencies.size());
                 waitForTask.wait(waitForTaskLock, [this]{
                     return ((readyToRun.size() != 0) || stop);
                 });
@@ -302,15 +303,18 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                     // printf("[Thread %d]: I totally completed a task group\n", thread_id);
                     for (TaskRecord* nextTaskRecord : dependencies[myTaskRecord->str_taskid]) {
                         nextTaskRecord->remaining_dependencies -= 1;
+                        printf("[Thread %d]: next task remaining dependencies: %d\n", thread_id, nextTaskRecord->remaining_dependencies);
                         if (nextTaskRecord->remaining_dependencies == 0) {
                             // printf("[Thread %d]: I added a new task group\n", thread_id);
                             readyToRun.emplace_back(nextTaskRecord);
-                            waitForTask.notify_all();
                         }
                     }
+                    waitForTask.notify_all();
+                    printf("[Thread %d] I notified. readyToRun size %ld\n", thread_id, readyToRun.size());
+
                     dependencies.erase(myTaskRecord->str_taskid);
                     total_task_completed += 1;
-                    // printf("[Thread %d]: total task progress is %d/%d\n", thread_id, total_task_completed, final_total_task_launched);
+                    printf("[Thread %d]: total task progress is %d/%d\n", thread_id, total_task_completed, final_total_task_launched);
                     if (total_task_completed == final_total_task_launched) {
                         waitForComplete.notify_all();
                     }
