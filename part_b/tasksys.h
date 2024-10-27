@@ -97,7 +97,7 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         int next_task_id;
         std::condition_variable waitForTask;
         std::condition_variable waitForComplete;
-        // std::mutex accessTotalTask;
+        std::mutex accessTotalTask;
         int current_total_task_launched;
         int final_total_task_launched;
         int total_task_completed;
