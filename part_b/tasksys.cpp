@@ -218,10 +218,10 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     currentTask->remaining_dependencies = 0;
     currentTask->str_taskid = std::to_string(next_task_id);
     next_task_id += 1;
-    dependencies[currentTask->str_taskid] = std::vector<TaskRecord*>();
 
     {
         std::unique_lock<std::mutex> lock(accessDependencies);
+        dependencies[currentTask->str_taskid] = std::vector<TaskRecord*>();
         for (TaskID dep : deps) {
             if (dependencies.find(std::to_string(dep)) == dependencies.end()){
                 // printf("TaskID %d has no dependencies\n", dep);
