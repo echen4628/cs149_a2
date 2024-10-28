@@ -9,11 +9,12 @@
 #include "mutex"
 #include "condition_variable"
 #include "string"
+#include "algorithm"
 
 struct TaskRecord {
-    int next_work_item;
-    int total_work_count;
-    int completed_work_count;
+    std::atomic<int> next_work_item;
+    std::atomic<int> total_work_count;
+    std::atomic<int> completed_work_count;
     int remaining_dependencies;
     std::string str_taskid;
     IRunnable* current_runnable;
@@ -90,7 +91,7 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::vector<std::thread> workers;
         std::atomic<bool> stop;
         std::vector<TaskRecord*> readyToRun;
-        std::unordered_map<std::string, std::vector<TaskRecord*>> dependencies;
+        std::unordered_map<std::string, std::vector<TaskRecord*>> dependencies; // A->B A:{B}
         std::mutex accessReadyToRun;
         std::mutex accessDependencies;
         std::mutex bigMutex;

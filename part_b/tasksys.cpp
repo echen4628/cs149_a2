@@ -139,7 +139,7 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     current_total_task_launched = 0;
     final_total_task_launched = -1;
     total_task_completed = 0;
-    for (int i = 1; i < num_threads; i++){
+    for (int i = 0; i < num_threads; i++){
         workers.emplace_back([this, i]() {
             TaskSystemParallelThreadPoolSleeping::workerThreadStart(i);
         });
@@ -266,10 +266,14 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     {
         std::unique_lock<std::mutex> lockTotalTask(accessTotalTask);
         final_total_task_launched = current_total_task_launched;
+        waitForComplete.wait(lockTotalTask, [this]{
+            return ((final_total_task_launched == total_task_completed) || stop);
+        });
     }
     // bigMutex.unlock();
     // waitForTask.notify_all();
-    workerThreadStart(0);
+    // workerThreadStart(0);
+
     return;
 }
 
@@ -282,7 +286,8 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
         {
             std::unique_lock<std::mutex> LockReadyToRun(accessReadyToRun);
             if (readyToRun.size() != 0){
-                myTaskRecord = readyToRun[readyToRun.size()-1];
+                int myTaskRecordIdx = thread_id%readyToRun.size();
+                myTaskRecord = readyToRun[myTaskRecordIdx];
                 {
                     std::unique_lock<std::mutex> LockTask(myTaskRecord->accessTaskRecord);
                     if (myTaskRecord->next_work_item < myTaskRecord->total_work_count){
@@ -291,6 +296,7 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
 
                     myTaskRecord->next_work_item.fetch_add(1);
                     if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
+                        readyToRun[myTaskRecordIdx] = readyToRun[readyToRun.size()-1];
                         readyToRun.pop_back();
                     }
                 }
@@ -311,21 +317,12 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
         // }
         if (myWorkItem == -1) {
             // printf("[Thread %d] Can't find work\n", thread_id);
-            if (thread_id == 0) {
-                std::unique_lock<std::mutex> waitForCompleteLock(accessTotalTask);
-                waitForComplete.wait(waitForCompleteLock, [this]{
-                    return ((final_total_task_launched == total_task_completed) || stop);
-                });
-                // printf("[Thread %d] Looks done to me\n", thread_id);
-                return;
-            } else {
-                std::unique_lock<std::mutex> waitForTaskLock(accessReadyToRun);
-                // printf("[Thread %d] %ld work available\n", thread_id, readyToRun.size());
-                waitForTask.wait(waitForTaskLock, [this]{
-                    return ((readyToRun.size() != 0) || stop);
-                });
-                continue;
-            }
+            std::unique_lock<std::mutex> waitForTaskLock(accessReadyToRun);
+            // printf("[Thread %d] %ld work available\n", thread_id, readyToRun.size());
+            waitForTask.wait(waitForTaskLock, [this]{
+                return ((readyToRun.size() != 0) || stop);
+            });
+            continue;
         } else{
             // printf("[Thread %d]: I have task %d\n", thread_id, myWorkItem);
             myTaskRecord->current_runnable->runTask(myWorkItem, myTaskRecord->total_work_count);
