@@ -48,11 +48,14 @@ public:
     TaskSystemParallelSpawn(int num_threads);
     ~TaskSystemParallelSpawn();
     const char *name();
-    static void workerThreadStart(WorkerArgs *const args);
+    void workerThreadStart(WorkerArgs *const args);
     void run(IRunnable *runnable, int num_total_tasks);
     TaskID runAsyncWithDeps(IRunnable *runnable, int num_total_tasks,
                             const std::vector<TaskID> &deps);
     void sync();
+    int num_threads;
+    int next_task;
+    std::mutex access_next_task;
 };
 
 /*

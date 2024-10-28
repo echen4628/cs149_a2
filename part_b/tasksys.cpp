@@ -280,7 +280,6 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
         TaskRecord* myTaskRecord = NULL;
         int myWorkItem = -1;
         {
-            // std::unique_lock<std::mutex> lock(bigMutex);
             std::unique_lock<std::mutex> LockReadyToRun(accessReadyToRun);
             if (readyToRun.size() != 0){
                 myTaskRecord = readyToRun[readyToRun.size()-1];
@@ -290,7 +289,7 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                         myWorkItem = myTaskRecord->next_work_item;
                     }
 
-                    myTaskRecord->next_work_item += 1;
+                    myTaskRecord->next_work_item.fetch_add(1);
                     if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
                         readyToRun.pop_back();
                     }
@@ -298,6 +297,18 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                                    
             }
         }
+        // if (myTaskRecord != NULL) {
+        //     std::unique_lock<std::mutex> LockTask(myTaskRecord->accessTaskRecord);
+        //     if (myTaskRecord->next_work_item < myTaskRecord->total_work_count){
+        //         myWorkItem = myTaskRecord->next_work_item;
+        //     }
+
+        //     myTaskRecord->next_work_item += 1;
+        //     if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
+        //         std::unique_lock<std::mutex> LockReadyToRun(accessReadyToRun);
+        //         readyToRun.pop_back();
+        //     }
+        // }
         if (myWorkItem == -1) {
             // printf("[Thread %d] Can't find work\n", thread_id);
             if (thread_id == 0) {
@@ -326,7 +337,7 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                 bool completely_done_with_task = false;
                 {
                     std::unique_lock<std::mutex> lock(myTaskRecord->accessTaskRecord);
-                    myTaskRecord->completed_work_count += 1;
+                    myTaskRecord->completed_work_count.fetch_add(1);
                     completely_done_with_task = myTaskRecord->completed_work_count == myTaskRecord->total_work_count;
                 }
 
@@ -334,21 +345,22 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                     // printf("[Thread %d]: I totally completed a task group\n", thread_id);
                     {
                         std::unique_lock<std::mutex> dependencyLock(accessDependencies);
-                        for (TaskRecord* nextTaskRecord : dependencies[myTaskRecord->str_taskid]) {
-                            {
-                                std::unique_lock<std::mutex> LockNextTask(nextTaskRecord->accessTaskRecord);
-                                nextTaskRecord->remaining_dependencies -= 1;
-                                // printf("[Thread %d]: the following task needs to clear %d dependencies.\n", thread_id, nextTaskRecord->remaining_dependencies);
-                                if (nextTaskRecord->remaining_dependencies == 0) {
-                                    // printf("[Thread %d]: I added a new task group\n", thread_id);
-                                    std::unique_lock<std::mutex> readyToRunLock(accessReadyToRun);
-                                    readyToRun.emplace_back(nextTaskRecord);
-                                    waitForTask.notify_all();
+                            for (TaskRecord* nextTaskRecord : dependencies[myTaskRecord->str_taskid]) {
+                                {
+                                    std::unique_lock<std::mutex> LockNextTask(nextTaskRecord->accessTaskRecord);
+                                    nextTaskRecord->remaining_dependencies -= 1;
+                                    // printf("[Thread %d]: the following task needs to clear %d dependencies.\n", thread_id, nextTaskRecord->remaining_dependencies);
+                                    if (nextTaskRecord->remaining_dependencies == 0) {
+                                        // printf("[Thread %d]: I added a new task group\n", thread_id);
+                                        std::unique_lock<std::mutex> readyToRunLock(accessReadyToRun);
+                                        readyToRun.emplace_back(nextTaskRecord);
+                                        waitForTask.notify_all();
+                                    }
                                 }
+                                
                             }
-                            
-                        }
                         dependencies.erase(myTaskRecord->str_taskid);
+                        
                     }
                     
                     {
