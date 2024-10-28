@@ -56,12 +56,45 @@ TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
+    this->num_threads = num_threads;
+    next_task = 0;
 }
 
 TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {}
 
 void TaskSystemParallelSpawn::workerThreadStart(WorkerArgs * const args){
-    args->runnable->runTask(args->task_id, args->num_total_tasks);
+    // printf("[Thread %d] Hello from thread\n", args->task_id);
+    while(true)
+    {
+        int my_task = 0;
+        
+        // Lock the access to `next_task` to ensure thread safety
+        {
+            std::unique_lock<std::mutex> Lock(access_next_task);
+            
+            // Check if there are still tasks available
+            if (next_task >= args->num_total_tasks) {
+                // If no tasks are left, exit the loop
+                // printf("[Thread %d] next task %d total_tasks %d\n", args->task_id, next_task, args->num_total_tasks);
+
+                // printf("[Thread %d] No more tasks available. Exiting.\n", args->task_id);
+                break;
+            }
+            
+            // Assign the next available task
+            my_task = next_task;
+            next_task += 1;
+        }
+
+        if (my_task < args->num_total_tasks) {
+            // printf("[Thread %d] I will work on task %d out of %d\n", args->task_id, my_task, args->num_total_tasks);
+            args->runnable->runTask(my_task, args->num_total_tasks);
+        } else {
+            // If the task number is out of range, exit the loop
+            // printf("[Thread %d] Task %d is out of range. Exiting.\n", args->task_id, my_task);
+            break;
+        }
+    }
 }
 
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
@@ -74,20 +107,26 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     //
 
     // Creates thread objects that do not yet represent a thread.
-    std::thread workers[num_total_tasks];
-    WorkerArgs workerArgs[num_total_tasks];
-    for (int i = 0; i < num_total_tasks; i++) {
+    // printf("Start of a run\n");
+    std::thread workers[num_threads];
+    WorkerArgs workerArgs[num_threads];
+    next_task = 0;
+    for (int i = 0; i < num_threads; i++) {
         workerArgs[i].runnable = runnable;
         workerArgs[i].task_id = i;
         workerArgs[i].num_total_tasks = num_total_tasks;
     }
 
-    for (int i = 1; i < num_total_tasks; i++) {
-        workers[i] = std::thread(workerThreadStart, &workerArgs[i]);
+    for (int i = 1; i < num_threads; i++) {
+        // workers[i] = std::thread(this->workerThreadStart, &workerArgs[i]);
+        workers[i] = std::thread([this, &workerArgs, i]() {
+            this->workerThreadStart(&workerArgs[i]);
+        });
+
     }
     workerThreadStart(&workerArgs[0]);
 
-    for (int i = 1; i < num_total_tasks; i++) {
+    for (int i = 1; i < num_threads; i++) {
         workers[i].join();
     }
     // printf("I think I'm done\n");
