@@ -160,17 +160,16 @@ TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-
-    for (int i = 1; i < num_threads; i++) {
-        workers.emplace_back([this, i]() { 
-            this->workerThreadStart(i); 
-        });
-    }
     next_task = 0;
     current_num_total_tasks = 0;
     tasks_completed = 0;
     current_runnable = NULL;
     stop = false;
+    for (int i = 1; i < num_threads; i++) {
+        workers.emplace_back([this, i]() { 
+            this->workerThreadStart(i); 
+        });
+    }
 }
 
 void TaskSystemParallelThreadPoolSpinning::workerThreadStart(int const thread_id){
@@ -259,16 +258,16 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    for (int i = 1; i < num_threads; i++) {
-        workers.emplace_back([this, i]() { 
-            this->workerThreadStart(i); 
-        });
-    }
     next_task = 0;
     current_num_total_tasks = 0;
     tasks_completed = 0;
     current_runnable = NULL;
     stop = false;
+    for (int i = 0; i < num_threads; i++) {
+        workers.emplace_back([this, i]() { 
+            this->workerThreadStart(i); 
+        });
+    }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
