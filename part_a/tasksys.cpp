@@ -68,24 +68,20 @@ void TaskSystemParallelSpawn::workerThreadStart(WorkerArgs * const args){
     {
         int my_task = 0;
         
-        // Lock the access to `next_task` to ensure thread safety
         {
             std::unique_lock<std::mutex> Lock(access_next_task);
             
             // Check if there are still tasks available
-            if (next_task >= args->num_total_tasks) {
-                // If no tasks are left, exit the loop
-                // printf("[Thread %d] next task %d total_tasks %d\n", args->task_id, next_task, args->num_total_tasks);
-
-                // printf("[Thread %d] No more tasks available. Exiting.\n", args->task_id);
+            if (next_task >= args->num_total_tasks) {                
                 break;
             }
             
-            // Assign the next available task
+            // If there is work, assign the next piece of work to this thread
             my_task = next_task;
             next_task += 1;
         }
 
+        // if you have work, work on it
         if (my_task < args->num_total_tasks) {
             // printf("[Thread %d] I will work on task %d out of %d\n", args->task_id, my_task, args->num_total_tasks);
             args->runnable->runTask(my_task, args->num_total_tasks);
@@ -111,6 +107,8 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     std::thread workers[num_threads];
     WorkerArgs workerArgs[num_threads];
     next_task = 0;
+
+    // launch my threads
     for (int i = 0; i < num_threads; i++) {
         workerArgs[i].runnable = runnable;
         workerArgs[i].task_id = i;
@@ -118,7 +116,6 @@ void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
     }
 
     for (int i = 1; i < num_threads; i++) {
-        // workers[i] = std::thread(this->workerThreadStart, &workerArgs[i]);
         workers[i] = std::thread([this, &workerArgs, i]() {
             this->workerThreadStart(&workerArgs[i]);
         });
@@ -176,11 +173,14 @@ void TaskSystemParallelThreadPoolSpinning::workerThreadStart(int const thread_id
     while(not stop) {
         int my_task = -1;
         grab_task_mutex.lock();
+        // look for next task, if there is work, assign it to this thread
         if (next_task < current_num_total_tasks) {
             my_task = next_task;
             next_task++;
         }
         grab_task_mutex.unlock();
+
+        // if there is work, work on it
         if (my_task != -1){
             current_runnable->runTask(my_task, current_num_total_tasks);
             complete_task_mutex.lock();
@@ -189,6 +189,7 @@ void TaskSystemParallelThreadPoolSpinning::workerThreadStart(int const thread_id
         }
         if (thread_id == 0){
             complete_task_mutex.lock();
+            // update completion status
             if (tasks_completed == current_num_total_tasks){
                 complete_task_mutex.unlock();
                 return;
