@@ -49,7 +49,7 @@ ITaskSystem *selectTaskSystemRefImpl(int num_threads, TaskSystemType type) {
 
 int main(int argc, char** argv)
 {
-    const int n_tests = 31;
+    const int n_tests = 35;
     int num_threads = DEFAULT_NUM_THREADS;
     int num_timing_iterations = DEFAULT_NUM_TIMING_ITERATIONS;
 
@@ -58,6 +58,8 @@ int main(int argc, char** argv)
         simpleTestAsync,
         pingPongEqualTest,
         pingPongUnequalTest,
+        massiveDependenciesPingPongEqualTest,
+        massiveDependenciesPingPongUnequalTest,
         superLightTest,
         superSuperLightTest,
         recursiveFibonacciTest,
@@ -69,6 +71,8 @@ int main(int argc, char** argv)
         mandelbrotChunkedTest,
         pingPongEqualAsyncTest,
         pingPongUnequalAsyncTest,
+        massiveDependenciesPingPongEqualAsyncTest,
+        massiveDependenciesPingPongUnequalAsyncTest,
         superLightAsyncTest,
         superSuperLightAsyncTest,
         recursiveFibonacciAsyncTest,
@@ -90,6 +94,8 @@ int main(int argc, char** argv)
         "simple_test_async",
         "ping_pong_equal",
         "ping_pong_unequal",
+        "massive_dependencies_ping_pong_equal",
+        "massive_dependencies_ping_pong_unequal",
         "super_light",
         "super_super_light",
         "recursive_fibonacci",
@@ -101,6 +107,8 @@ int main(int argc, char** argv)
         "mandelbrot_chunked",
         "ping_pong_equal_async",
         "ping_pong_unequal_async",
+        "massive_dependencies_ping_pong_equal_async",
+        "massive_dependencies_ping_pong_unequal_async",
         "super_light_async",
         "super_super_light_async",
         "recursive_fibonacci_async",

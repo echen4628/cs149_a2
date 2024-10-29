@@ -488,6 +488,13 @@ class StrictDependencyTask: public IRunnable {
         ~StrictDependencyTask() {}
 };
 
+void printArray(int* array, int length) {
+    for(int i =0; i < length; i++){
+        printf("%d, ", array[i]);
+    }
+    printf("\n");
+}
+
 /* 
  * ==================================================================
  *   Begin test definitions
@@ -516,7 +523,8 @@ TestResults simpleTest(ITaskSystem* t, bool do_async) {
     for (int i=0; i<num_elements; i++) {
         array[i] = i + 1;
     }
-
+    printf("Array initial: ");
+    printArray(array, num_elements);
     SimpleMultiplyTask first = SimpleMultiplyTask(num_elements, array);
     SimpleMultiplyTask second = SimpleMultiplyTask(num_elements, array);
 
@@ -529,6 +537,9 @@ TestResults simpleTest(ITaskSystem* t, bool do_async) {
         secondDeps.push_back(first_task_id);
         t->runAsyncWithDeps(&second, num_tasks, secondDeps);
         t->sync();
+        printf("Array final: ");
+        printArray(array, num_elements);
+
     } else {
         t->run(&first, num_tasks);
         t->run(&second, num_tasks);
@@ -541,10 +552,12 @@ TestResults simpleTest(ITaskSystem* t, bool do_async) {
 
     for (int i=0; i<num_elements; i++) {
         int value = i+1;
-
-        for (int j=0; j<num_bulk_task_launches; j++)
+        printf("initial value: %d\n",value);
+        for (int j=0; j<num_bulk_task_launches; j++){
             value = SimpleMultiplyTask::multiply_task(3, value);
-
+            printf("value: %d, ",value);
+        }
+        printf("\n");
         int expected = value;
         if (array[i] != expected) {
             results.passed = false;
@@ -559,12 +572,136 @@ TestResults simpleTest(ITaskSystem* t, bool do_async) {
     return results;
 }
 
+
+
 TestResults simpleTestSync(ITaskSystem* t) {
     return simpleTest(t, false);
 }
 
+
 TestResults simpleTestAsync(ITaskSystem* t) {
     return simpleTest(t, true);
+}
+
+/*
+ * Computation: massiveDependenciesTest launches 400 bulk task launches with 64 tasks each.
+ * Similar to pingPongTest. The first 399 bulk tasks all have no dependencies, but the
+ * 400th bulk task depends on all previous 399 bulk tasks.
+ */
+TestResults massiveDependenciesTest(ITaskSystem* t, bool equal_work, bool do_async,
+                         int num_elements, int base_iters) {
+
+    int num_tasks = 64;
+    int num_bulk_task_launches = 400;   
+
+    int* input = new int[num_elements];
+    int* output = new int[num_elements];
+
+    // Init input
+    for (int i=0; i<num_elements; i++) {
+        input[i] = i;
+        output[i] = 0;
+    }
+
+    // Ping-pong input and output buffers with all the
+    // back-to-back task launches
+    std::vector<PingPongTask*> runnables(
+        num_bulk_task_launches);
+    for (int i=0; i<num_bulk_task_launches; i++) {
+        if (i % 2 == 0)
+            runnables[i] = new PingPongTask(
+                num_elements, input, output,
+                equal_work, base_iters);
+        else
+            runnables[i] = new PingPongTask(
+                num_elements, output, input,
+                equal_work, base_iters);
+    }
+
+    // Run the test
+    double start_time = CycleTimer::currentSeconds();
+    std::vector<TaskID> deps;
+    std::vector<TaskID> emptyDeps;
+    for (int i=0; i<num_bulk_task_launches; i++) {
+        if (do_async) {
+            TaskID curr_task_id;
+            if (i == num_bulk_task_launches-1){
+                curr_task_id = t->runAsyncWithDeps(
+                runnables[i], num_tasks, deps);
+            } else{
+                curr_task_id = t->runAsyncWithDeps(
+                runnables[i], num_tasks, emptyDeps);
+            } 
+            deps.push_back(curr_task_id);
+        } else {
+            t->run(runnables[i], num_tasks);
+        }
+    }
+    if (do_async)
+        t->sync();
+    double end_time = CycleTimer::currentSeconds();
+
+    // Correctness validation
+    TestResults results;
+    results.passed = true;
+
+    // Number of ping-pongs determines which buffer to look at for the results
+    int* buffer = (num_bulk_task_launches % 2 == 1) ? output : input; 
+
+    for (int i=0; i<num_elements; i++) {
+        int value = i;
+        for (int j=0; j<num_bulk_task_launches; j++) {
+            int iters = (!equal_work) ? PingPongTask::ping_pong_iters(
+                i, num_elements, base_iters) : base_iters;
+            value = PingPongTask::ping_pong_work(iters, value);
+        }
+
+        int expected = value;
+        if (buffer[i] != expected) {
+            results.passed = false;
+            printf("%d: %d expected=%d\n", i, buffer[i], expected);
+            break;
+        }
+    }
+    results.time = end_time - start_time;
+
+    delete [] input;
+    delete [] output;
+    for (int i=0; i<num_bulk_task_launches; i++)
+        delete runnables[i];
+    
+    return results;
+}
+
+// TestResults massiveDependencies(ITaskSystem* t){
+//     int num_elements = 32 * 1024;
+//     int base_iters = 0;
+//     return massiveDependenciesTest(t, true, false, num_elements, base_iters);
+// }
+
+
+TestResults massiveDependenciesPingPongEqualTest(ITaskSystem* t) {
+    int num_elements = 512 * 1024;
+    int base_iters = 32;
+    return massiveDependenciesTest(t, true, false, num_elements, base_iters);
+}
+
+TestResults massiveDependenciesPingPongUnequalTest(ITaskSystem* t) {
+    int num_elements = 512 * 1024;
+    int base_iters = 32;
+    return massiveDependenciesTest(t, false, false, num_elements, base_iters);
+}
+
+TestResults massiveDependenciesPingPongEqualAsyncTest(ITaskSystem* t) {
+    int num_elements = 512 * 1024;
+    int base_iters = 32;
+    return massiveDependenciesTest(t, true, true, num_elements, base_iters);
+}
+
+TestResults massiveDependenciesPingPongUnequalAsyncTest(ITaskSystem* t) {
+    int num_elements = 512 * 1024;
+    int base_iters = 32;
+    return massiveDependenciesTest(t, false, true, num_elements, base_iters);
 }
 
 /*
