@@ -177,7 +177,15 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
 
     dependencies.clear();  // Clear the unordered_map itself
 
-    for (auto& task: readyToRun) {
+    // for (auto& task: readyToRun) {
+    //     delete task;
+    // }
+    for (auto it = readyToRun.begin(); it != readyToRun.end(); ++it) {
+        // Access the key and the vector of TaskRecord pointers
+        // const std::string& key = it->first;         // Access the key
+        TaskRecord* task = it->second;  // Access the vector of TaskRecord pointers
+
+        // Iterate over each vector in the map
         delete task;
     }
     readyToRun.clear();
@@ -240,7 +248,7 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
         std::unique_lock<std::mutex> lock(accessReadyToRun);
         if (currentTask->remaining_dependencies == 0) {
             // printf("Added task %d to readytoRun\n", next_task_id-1);
-            readyToRun.emplace_back(currentTask);
+            readyToRun[currentTask->str_taskid] = currentTask;
             waitForTask.notify_all();
         }
    }
@@ -283,21 +291,37 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
         // printf("[Thread %d] Looking for work\n", thread_id);
         TaskRecord* myTaskRecord = NULL;
         int myWorkItem = -1;
-        {
+        if (myTaskRecord != NULL){
+            std::unique_lock<std::mutex> LockTask(myTaskRecord->accessTaskRecord);
+            if (myTaskRecord->next_work_item < myTaskRecord->total_work_count){
+                myWorkItem = myTaskRecord->next_work_item;
+                myTaskRecord->next_work_item.fetch_add(1);
+            }
+
+             if (myTaskRecord->next_work_item >= myTaskRecord->total_work_count) {
+                // readyToRun[myTaskRecordIdx] = readyToRun[readyToRun.size()-1];
+                // readyToRun.pop_back();
+                std::unique_lock<std::mutex> LockReadyToRun(accessReadyToRun);
+                readyToRun.erase(myTaskRecord->str_taskid);
+            }
+        } else{
             std::unique_lock<std::mutex> LockReadyToRun(accessReadyToRun);
             if (readyToRun.size() != 0){
-                int myTaskRecordIdx = thread_id%readyToRun.size();
-                myTaskRecord = readyToRun[myTaskRecordIdx];
+                // int myTaskRecordIdx = thread_id%readyToRun.size();
+                auto myTaskRecordItem = readyToRun.begin();
+                std::advance(myTaskRecord, thread_id%readyToRun.size());
+                myTaskRecord = myTaskRecordItem->second;
                 {
                     std::unique_lock<std::mutex> LockTask(myTaskRecord->accessTaskRecord);
                     if (myTaskRecord->next_work_item < myTaskRecord->total_work_count){
                         myWorkItem = myTaskRecord->next_work_item;
+                        myTaskRecord->next_work_item.fetch_add(1);
                     }
 
-                    myTaskRecord->next_work_item.fetch_add(1);
-                    if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
-                        readyToRun[myTaskRecordIdx] = readyToRun[readyToRun.size()-1];
-                        readyToRun.pop_back();
+                    if (myTaskRecord->next_work_item >= myTaskRecord->total_work_count) {
+                        // readyToRun[myTaskRecordIdx] = readyToRun[readyToRun.size()-1];
+                        // readyToRun.pop_back();
+                        readyToRun.erase(myTaskRecord->str_taskid);
                     }
                 }
                                    
@@ -350,7 +374,8 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                                     if (nextTaskRecord->remaining_dependencies == 0) {
                                         // printf("[Thread %d]: I added a new task group\n", thread_id);
                                         std::unique_lock<std::mutex> readyToRunLock(accessReadyToRun);
-                                        readyToRun.emplace_back(nextTaskRecord);
+                                        // readyToRun.emplace_back(nextTaskRecord);
+                                        readyToRun[nextTaskRecord->str_taskid] = nextTaskRecord;
                                         waitForTask.notify_all();
                                     }
                                 }

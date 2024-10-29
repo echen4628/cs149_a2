@@ -90,7 +90,8 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
 
         std::vector<std::thread> workers;
         std::atomic<bool> stop;
-        std::vector<TaskRecord*> readyToRun;
+        // std::vector<TaskRecord*> readyToRun;
+        std::unordered_map<std::string, TaskRecord*> readyToRun;
         std::unordered_map<std::string, std::vector<TaskRecord*>> dependencies; // A->B A:{B}
         std::mutex accessReadyToRun;
         std::mutex accessDependencies;
