@@ -145,7 +145,6 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
         });
     }
 
-    // printf("Newly created\n");
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
@@ -163,29 +162,22 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     }
     workers.clear();
 
+    // deallocate dependencies
     for (auto it = dependencies.begin(); it != dependencies.end(); ++it) {
-        // Access the key and the vector of TaskRecord pointers
-        // const std::string& key = it->first;         // Access the key
-        std::vector<TaskRecord*>& task_list = it->second;  // Access the vector of TaskRecord pointers
+        std::vector<TaskRecord*>& task_list = it->second;
 
-        // Iterate over each vector in the map
         for (TaskRecord* task : task_list) {
-            delete task;  // Deallocate the dynamically allocated TaskRecord
+            delete task;  // Deallocate TaskRecord
         }
-        task_list.clear();  // Clear the vector after deallocating its elements
+        task_list.clear();
     }
 
-    dependencies.clear();  // Clear the unordered_map itself
+    dependencies.clear();
 
-    // for (auto& task: readyToRun) {
-    //     delete task;
-    // }
+    // deallocate readyToRun
     for (auto it = readyToRun.begin(); it != readyToRun.end(); ++it) {
-        // Access the key and the vector of TaskRecord pointers
-        // const std::string& key = it->first;         // Access the key
-        TaskRecord* task = it->second;  // Access the vector of TaskRecord pointers
+        TaskRecord* task = it->second;
 
-        // Iterate over each vector in the map
         delete task;
     }
     readyToRun.clear();
@@ -216,11 +208,7 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     // TODO: CS149 students will implement this method in Part B.
     //
 
-    // for (int i = 0; i < num_total_tasks; i++) {
-    //     runnable->runTask(i, num_total_tasks);
-    // }
-    
-    // create a new work_unit
+    // create a new TaskRecord
     TaskRecord* currentTask = new TaskRecord;
     currentTask->next_work_item = 0;
     currentTask->completed_work_count = 0;
@@ -231,6 +219,7 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     next_task_id += 1;
 
     {
+        // check if it has dependencies. If so, update dependencies dict
         std::unique_lock<std::mutex> lock(accessDependencies);
         dependencies[currentTask->str_taskid] = std::vector<TaskRecord*>();
         for (TaskID dep : deps) {
@@ -245,6 +234,7 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
         }
     }
    {
+        // if no dependencies, update readyToRun
         std::unique_lock<std::mutex> lock(accessReadyToRun);
         if (currentTask->remaining_dependencies == 0) {
             // printf("Added task %d to readytoRun\n", next_task_id-1);
@@ -254,13 +244,11 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
    }
     
 
-
-    // bigMutex.lock();
     {
+        // updat total number of tasks launched
         std::unique_lock<std::mutex> lockTotalTask(accessTotalTask);
         current_total_task_launched += 1;
     }
-    // bigMutex.unlock();
 
     return next_task_id-1;
 }
@@ -270,17 +258,16 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     //
     // TODO: CS149 students will modify the implementation of this method in Part B.
     //
-    // bigMutex.lock();
     {
+        // update the final number of bulk tasks launched
         std::unique_lock<std::mutex> lockTotalTask(accessTotalTask);
         final_total_task_launched = current_total_task_launched;
+
+        // sleep until woken
         waitForComplete.wait(lockTotalTask, [this]{
             return ((final_total_task_launched == total_task_completed) || stop);
         });
     }
-    // bigMutex.unlock();
-    // waitForTask.notify_all();
-    // workerThreadStart(0);
 
     return;
 }
@@ -292,6 +279,7 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
         TaskRecord* myTaskRecord = NULL;
         int myWorkItem = -1;
         if (myTaskRecord != NULL){
+            // check if there is more parts of the current task to be done before getting another one
             std::unique_lock<std::mutex> LockTask(myTaskRecord->accessTaskRecord);
             if (myTaskRecord->next_work_item < myTaskRecord->total_work_count){
                 myWorkItem = myTaskRecord->next_work_item;
@@ -299,16 +287,15 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
             }
 
              if (myTaskRecord->next_work_item >= myTaskRecord->total_work_count) {
-                // readyToRun[myTaskRecordIdx] = readyToRun[readyToRun.size()-1];
-                // readyToRun.pop_back();
                 std::unique_lock<std::mutex> LockReadyToRun(accessReadyToRun);
                 readyToRun.erase(myTaskRecord->str_taskid);
             }
         } else{
+            // I didn't have work, so grab one from readyToRun
             std::unique_lock<std::mutex> LockReadyToRun(accessReadyToRun);
             if (readyToRun.size() != 0){
-                // int myTaskRecordIdx = thread_id%readyToRun.size();
                 auto myTaskRecordItem = readyToRun.begin();
+                // pick the task based on thread_id to reduce contention in the future.
                 std::advance(myTaskRecord, thread_id%readyToRun.size());
                 myTaskRecord = myTaskRecordItem->second;
                 {
@@ -319,26 +306,14 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
                     }
 
                     if (myTaskRecord->next_work_item >= myTaskRecord->total_work_count) {
-                        // readyToRun[myTaskRecordIdx] = readyToRun[readyToRun.size()-1];
-                        // readyToRun.pop_back();
+                        // if the task is no more subparts, remove from readyToRun
                         readyToRun.erase(myTaskRecord->str_taskid);
                     }
                 }
                                    
             }
         }
-        // if (myTaskRecord != NULL) {
-        //     std::unique_lock<std::mutex> LockTask(myTaskRecord->accessTaskRecord);
-        //     if (myTaskRecord->next_work_item < myTaskRecord->total_work_count){
-        //         myWorkItem = myTaskRecord->next_work_item;
-        //     }
 
-        //     myTaskRecord->next_work_item += 1;
-        //     if (myTaskRecord->next_work_item == myTaskRecord->total_work_count) {
-        //         std::unique_lock<std::mutex> LockReadyToRun(accessReadyToRun);
-        //         readyToRun.pop_back();
-        //     }
-        // }
         if (myWorkItem == -1) {
             // printf("[Thread %d] Can't find work\n", thread_id);
             std::unique_lock<std::mutex> waitForTaskLock(accessReadyToRun);
@@ -349,11 +324,11 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
             continue;
         } else{
             // printf("[Thread %d]: I have task %d\n", thread_id, myWorkItem);
+
+            // if you have work, work on it.
             myTaskRecord->current_runnable->runTask(myWorkItem, myTaskRecord->total_work_count);
             // printf("[Thread %d]: I finished task %d\n", thread_id, myWorkItem);
             
-
-
                 // std::unique_lock<std::mutex> lock(bigMutex);
                 bool completely_done_with_task = false;
                 {
@@ -364,6 +339,8 @@ void TaskSystemParallelThreadPoolSleeping::workerThreadStart(int const thread_id
 
                 if (completely_done_with_task){
                     // printf("[Thread %d]: I totally completed a task group\n", thread_id);
+
+                    // if completely done with a task, update the dependencies map and total tasks completed
                     {
                         std::unique_lock<std::mutex> dependencyLock(accessDependencies);
                             for (TaskRecord* nextTaskRecord : dependencies[myTaskRecord->str_taskid]) {

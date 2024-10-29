@@ -95,7 +95,6 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::unordered_map<std::string, std::vector<TaskRecord*>> dependencies; // A->B A:{B}
         std::mutex accessReadyToRun;
         std::mutex accessDependencies;
-        std::mutex bigMutex;
         int next_task_id;
         std::condition_variable waitForTask;
         std::condition_variable waitForComplete;
